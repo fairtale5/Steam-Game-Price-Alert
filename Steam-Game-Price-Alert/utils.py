@@ -20,25 +20,54 @@ def print_header(title):
     f = Figlet(font='slant')
     print("\033[1;34m" + f.renderText(title) + "\033[0m")
 
-def extract_app_id(game_link):
-    """Extract the APP_ID from the Steam game link."""
+STEAM_STORE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def parse_steam_link(steam_link):
+    """Read store id and kind (app or bundle) from a Steam store URL."""
     try:
-        app_id = game_link.split('/app/')[1].split('/')[0]
-        return app_id
+        parsed = urlparse(steam_link)
+        if "steampowered.com" not in parsed.netloc:
+            return None, None
+        path = parsed.path or ""
+        if "/app/" in path:
+            store_id = path.split("/app/")[1].split("/")[0]
+            return store_id, "app"
+        if "/bundle/" in path:
+            store_id = path.split("/bundle/")[1].split("/")[0]
+            return store_id, "bundle"
+        return None, None
     except Exception as e:
         logging.error(f"Invalid game link: {e}")
-        return None
+        return None, None
+
+
+def extract_app_id(game_link):
+    """Read store id from an /app/ or /bundle/ link (kept for existing callers)."""
+    store_id, _kind = parse_steam_link(game_link)
+    return store_id
+
+
+def store_page_url(store_id, item_type="app"):
+    """Build the Steam store page URL for an app or bundle id."""
+    if item_type == "bundle":
+        return f"https://store.steampowered.com/bundle/{store_id}/"
+    return f"https://store.steampowered.com/app/{store_id}/"
+
 
 def get_game_details(app_id, country_code, language):
-    """Fetch game details from the Steam API with error handling."""
+    """Fetch app details from the Steam appdetails API."""
     try:
         response = requests.get(
-            f'https://store.steampowered.com/api/appdetails?appids={app_id}&cc={country_code}&l={language}',
-            timeout=10
+            f"https://store.steampowered.com/api/appdetails?appids={app_id}&cc={country_code}&l={language}",
+            timeout=10,
         )
         response.raise_for_status()
         data = response.json()
-        return data.get(app_id, {}).get('data')
+        return data.get(app_id, {}).get("data")
     except requests.RequestException as e:
         logging.error(f"Error fetching details for app {app_id}: {e}")
         return None
@@ -46,9 +75,70 @@ def get_game_details(app_id, country_code, language):
         logging.error(f"Unexpected error fetching details for app {app_id}: {e}")
         return None
 
-def get_detailed_game_info(app_id, country_code, language):
+
+def _bundle_row_to_game_data(bundle_row, country_code="US"):
+    """Map ajaxresolvebundles JSON into the same shape scanners expect from appdetails."""
+    initial = int(bundle_row.get("initial_price") or 0)
+    final = int(bundle_row.get("final_price") or 0)
+    discount_percent = int(bundle_row.get("bundle_base_discount") or 0)
+    if initial > 0 and final < initial:
+        calculated = int(round((1 - final / initial) * 100))
+        discount_percent = max(discount_percent, calculated)
+    currency = "BRL" if country_code.upper() == "BR" else "USD"
+    return {
+        "name": bundle_row.get("name", "Unknown"),
+        "header_image": bundle_row.get("header_image_url") or bundle_row.get("main_capsule", ""),
+        "price_overview": {
+            "currency": currency,
+            "initial": initial,
+            "final": final,
+            "discount_percent": discount_percent,
+        },
+    }
+
+
+def get_bundle_details(bundle_id, country_code, language):
+    """Fetch bundle price/name via the store ajaxresolvebundles endpoint."""
+    try:
+        response = requests.get(
+            "https://store.steampowered.com/actions/ajaxresolvebundles",
+            params={
+                "bundleids": bundle_id,
+                "cc": country_code,
+                "l": language,
+            },
+            headers={"User-Agent": STEAM_STORE_UA},
+            timeout=10,
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not rows:
+            logging.error(f"No bundle data returned for bundle {bundle_id}")
+            return None
+        return _bundle_row_to_game_data(rows[0], country_code)
+    except requests.RequestException as e:
+        logging.error(f"Error fetching bundle {bundle_id}: {e}")
+        return None
+    except (ValueError, TypeError, KeyError) as e:
+        logging.error(f"Unexpected bundle response for {bundle_id}: {e}")
+        return None
+
+
+def fetch_store_item(steam_link, country_code, language):
+    """Fetch app or bundle store data using the link stored in the watchlist."""
+    store_id, item_type = parse_steam_link(steam_link)
+    if not store_id:
+        return None
+    if item_type == "bundle":
+        return get_bundle_details(store_id, country_code, language)
+    return get_game_details(store_id, country_code, language)
+
+def get_detailed_game_info(app_id, country_code, language, steam_link=None):
     """Get detailed game information including release date, reviews, and tags."""
-    game_data = get_game_details(app_id, country_code, language)
+    if steam_link and parse_steam_link(steam_link)[1] == "bundle":
+        game_data = get_bundle_details(app_id, country_code, language)
+    else:
+        game_data = get_game_details(app_id, country_code, language)
     if not game_data:
         return None
     
@@ -118,13 +208,14 @@ def validate_webhook_url(webhook_url):
         return False
 
 def validate_steam_link(steam_link):
-    """Validate Steam store link format."""
+    """Validate Steam store link format (/app/ or /bundle/)."""
     if not steam_link:
         return False
     try:
         parsed = urlparse(steam_link)
-        return (parsed.scheme in ['http', 'https'] and 
-                'steampowered.com' in parsed.netloc and
-                '/app/' in parsed.path)
+        if parsed.scheme not in ("http", "https") or "steampowered.com" not in parsed.netloc:
+            return False
+        path = parsed.path or ""
+        return "/app/" in path or "/bundle/" in path
     except Exception:
         return False

@@ -1,9 +1,10 @@
 import logging
 import time
-from saved_info import load_user_info, save_user_info
+from saved_info import load_user_info, save_user_info, get_discord_role_id
 from saved_games import initialize_database, add_game as add_game_to_db, remove_game, save_price_threshold, get_price_threshold, get_game_link
 from utils import (
-    get_all_games, extract_app_id, get_game_details, get_detailed_game_info,
+    get_all_games, extract_app_id, fetch_store_item, get_detailed_game_info,
+    parse_steam_link, store_page_url,
     validate_country_code, validate_language_code, 
     validate_webhook_url, validate_steam_link,
     clear_screen, print_header
@@ -86,8 +87,9 @@ def scan_for_sales_with_threshold(country_code, language, webhook_url, bot_name,
         elif 1 <= choice <= len(games):
             game_id, game_name = games[choice - 1]
             game_link = get_game_link(game_id)
-            app_id = extract_app_id(game_link)
-            if app_id:
+            store_id = extract_app_id(game_link)
+            _store_id, item_type = parse_steam_link(game_link)
+            if store_id:
                 # Step 2: Scanning Mode Choice
                 clear_screen()
                 print_header("🔍 Choose Scanning Mode 🔍")
@@ -107,7 +109,7 @@ def scan_for_sales_with_threshold(country_code, language, webhook_url, bot_name,
                     while True:  # Infinite loop for continuous scanning
                         hacker_text = "Fetching game details from Steam API..."
                         print(f"\n\033[1;33m{hacker_text}\033[0m")
-                        game_data = get_game_details(app_id, country_code, language)
+                        game_data = fetch_store_item(game_link, country_code, language)
                         if game_data and 'price_overview' in game_data:
                             price_info = game_data['price_overview']
                             current_price = price_info['final'] / 100  # Convert cents to dollars
@@ -115,11 +117,12 @@ def scan_for_sales_with_threshold(country_code, language, webhook_url, bot_name,
                             image_url = game_data['header_image']
                             
                             # Save price history
-                            save_price_history(game_id, app_id, current_price, discount_percent)
+                            save_price_history(game_id, store_id, current_price, discount_percent)
                             
                             # Check for historical low
-                            historical_low = get_historical_low(game_id, app_id)
+                            historical_low = get_historical_low(game_id, store_id)
                             is_historical_low = historical_low is not None and current_price <= historical_low
+                            page_url = store_page_url(store_id, item_type)
 
                             print(f"\n\033[1;36mGame: {game_name}\033[0m")
                             print(f"\033[1;32mCurrent Price: ${current_price:.2f} USD\033[0m")
@@ -131,7 +134,7 @@ def scan_for_sales_with_threshold(country_code, language, webhook_url, bot_name,
                                 # Use price target
                                 threshold = get_price_threshold(game_id)
                                 if threshold is not None and current_price <= threshold:
-                                    if not is_sale_notified(app_id):
+                                    if not is_sale_notified(store_id):
                                         print(f"\n\033[1;31mPrice target met! Current price: ${current_price:.2f} (Threshold: ${threshold:.2f})\033[0m")
                                         send_discord_notification(
                                             game_name=game_name,
@@ -141,21 +144,25 @@ def scan_for_sales_with_threshold(country_code, language, webhook_url, bot_name,
                                             webhook_url=webhook_url,
                                             bot_name=bot_name,
                                             bot_avatar=bot_avatar,
-                                            app_id=app_id,
+                                            app_id=store_id,
+                                            country_code=country_code,
+                                            currency_code=price_info.get("currency"),
                                             is_historical_low=is_historical_low,
-                                            historical_low=historical_low
+                                            historical_low=historical_low,
+                                            store_url=page_url,
+                                            discord_role_id=get_discord_role_id(),
                                         )
-                                        save_sale_reminder(app_id, game_name, current_price, discount_percent)
+                                        save_sale_reminder(store_id, game_name, current_price, discount_percent)
                                     else:
                                         print("\nSale already notified. Skipping notification.")
                                 else:
                                     print("\nPrice target not met. Skipping notification.")
-                                    if is_sale_notified(app_id):
-                                        remove_expired_sale(app_id)
+                                    if is_sale_notified(store_id):
+                                        remove_expired_sale(store_id)
                             elif mode_choice == "2":
                                 # Detect sales normally
                                 if discount_percent > 0:
-                                    if not is_sale_notified(app_id):
+                                    if not is_sale_notified(store_id):
                                         print(f"\n\033[1;31mSale detected! Current price: ${current_price:.2f} ({discount_percent}% off)\033[0m")
                                         send_discord_notification(
                                             game_name=game_name,
@@ -165,17 +172,21 @@ def scan_for_sales_with_threshold(country_code, language, webhook_url, bot_name,
                                             webhook_url=webhook_url,
                                             bot_name=bot_name,
                                             bot_avatar=bot_avatar,
-                                            app_id=app_id,
+                                            app_id=store_id,
+                                            country_code=country_code,
+                                            currency_code=price_info.get("currency"),
                                             is_historical_low=is_historical_low,
-                                            historical_low=historical_low
+                                            historical_low=historical_low,
+                                            store_url=page_url,
+                                            discord_role_id=get_discord_role_id(),
                                         )
-                                        save_sale_reminder(app_id, game_name, current_price, discount_percent)
+                                        save_sale_reminder(store_id, game_name, current_price, discount_percent)
                                     else:
                                         print("\nSale already notified. Skipping notification.")
                                 else:
                                     print("\nNo sale detected. Skipping notification.")
-                                    if is_sale_notified(app_id):
-                                        remove_expired_sale(app_id)
+                                    if is_sale_notified(store_id):
+                                        remove_expired_sale(store_id)
                             else:
                                 print("\n\033[1;31mInvalid mode choice. Try again.\033[0m")
                                 break
@@ -254,13 +265,13 @@ def add_game():
             print("\033[1;31mSteam link cannot be empty.\033[0m")
             continue
         if not validate_steam_link(steam_link):
-            print("\033[1;31mInvalid Steam link format. Please provide a valid Steam store link (e.g., https://store.steampowered.com/app/123456/).\033[0m")
+            print("\033[1;31mInvalid Steam link. Use /app/ or /bundle/ store URLs.\033[0m")
             continue
-        app_id = extract_app_id(steam_link)
-        if not app_id:
-            print("\033[1;31mCould not extract app ID from Steam link. Please provide a valid Steam store link.\033[0m")
+        store_id = extract_app_id(steam_link)
+        if not store_id:
+            print("\033[1;31mCould not read app or bundle id from link.\033[0m")
             continue
-        game_data = get_game_details(app_id, "US", "en")
+        game_data = fetch_store_item(steam_link, "US", "en")
         if game_data:
             game_name = game_data.get('name', 'Unknown Game')
             add_game_to_db(game_name, steam_link)
@@ -352,9 +363,9 @@ def view_current_prices(country_code, language):
     
     for game_id, game_name in games:
         game_link = get_game_link(game_id)
-        app_id = extract_app_id(game_link)
-        if app_id:
-            game_data = get_game_details(app_id, country_code, language)
+        store_id = extract_app_id(game_link)
+        if store_id:
+            game_data = fetch_store_item(game_link, country_code, language)
             if game_data and 'price_overview' in game_data:
                 price_info = game_data['price_overview']
                 current_price = price_info['final'] / 100
@@ -362,7 +373,7 @@ def view_current_prices(country_code, language):
                 original_price = price_info.get('initial', price_info['final']) / 100
                 
                 # Get historical low
-                historical_low = get_historical_low(game_id, app_id)
+                historical_low = get_historical_low(game_id, store_id)
                 is_historical_low = historical_low is not None and current_price <= historical_low
                 
                 print(f"\033[1;36m{game_name}\033[0m")
@@ -377,7 +388,7 @@ def view_current_prices(country_code, language):
                     print(f"  Historical Low: ${historical_low:.2f}")
                 
                 # Save to price history
-                save_price_history(game_id, app_id, current_price, discount_percent)
+                save_price_history(game_id, store_id, current_price, discount_percent)
             else:
                 print(f"\033[1;36m{game_name}\033[0m")
                 print(f"  \033[1;31mPrice information not available\033[0m")
@@ -407,14 +418,14 @@ def view_detailed_game_info(country_code, language):
             elif 1 <= choice <= len(games):
                 game_id, game_name = games[choice - 1]
                 game_link = get_game_link(game_id)
-                app_id = extract_app_id(game_link)
+                store_id = extract_app_id(game_link)
                 
-                if app_id:
+                if store_id:
                     clear_screen()
                     print_header("📋 Game Details 📋")
                     print("\033[1;33mLoading game information...\033[0m\n")
                     
-                    game_info = get_detailed_game_info(app_id, country_code, language)
+                    game_info = get_detailed_game_info(store_id, country_code, language, steam_link=game_link)
                     if game_info:
                         print(f"\033[1;36m{game_info['name']}\033[0m")
                         print("=" * 80)
@@ -433,7 +444,7 @@ def view_detailed_game_info(country_code, language):
                                 print(f"  Current: \033[1;32m${current_price:.2f}\033[0m")
                             
                             # Historical low
-                            historical_low = get_historical_low(game_id, app_id)
+                            historical_low = get_historical_low(game_id, store_id)
                             if historical_low:
                                 is_lowest = current_price <= historical_low
                                 if is_lowest:

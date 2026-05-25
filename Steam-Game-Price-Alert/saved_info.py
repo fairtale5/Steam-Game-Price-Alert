@@ -49,3 +49,26 @@ def load_user_info():
     except Exception as e:
         logging.error(f"Unexpected error loading user info: {e}")
         return None
+
+
+def get_discord_role_id():
+    """Read optional discord_role_id from user_info.json for webhook @role pings."""
+    info = load_user_info()
+    if not info:
+        return None
+    role = info.get("discord_role_id")
+    return str(role).strip() if role else None
+
+
+DEFAULT_SALE_CONTENT_TEMPLATE = (
+    "{mention}🏁 Promo ativa — **{price}** ({discount}% off)\n"
+    "[Compre na Steam]({url})"
+)
+
+
+def get_sale_content_template():
+    """Read optional sale_content_template from user_info.json."""
+    info = load_user_info()
+    if info and info.get("sale_content_template"):
+        return str(info["sale_content_template"]).strip()
+    return DEFAULT_SALE_CONTENT_TEMPLATE
