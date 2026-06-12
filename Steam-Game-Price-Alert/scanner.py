@@ -1,6 +1,6 @@
 import time
 import logging
-from saved_games import get_game_link, save_price_history, get_historical_low
+from saved_games import get_game_link
 from utils import (
     get_all_games,
     clear_screen,
@@ -10,7 +10,7 @@ from utils import (
     fetch_store_item,
     store_page_url,
 )
-from stop_spam import save_sale_reminder, is_sale_notified, remove_expired_sale
+from stop_spam import get_remembered_discount, remember_discount_state, should_post_sale
 from discord import send_discord_notification
 from saved_games import get_price_threshold
 from saved_info import get_discord_role_id
@@ -53,49 +53,34 @@ def scan_for_sales(country_code, language, webhook_url, bot_name, bot_avatar):
                             discount_percent = price_info['discount_percent']
                             image_url = game_data['header_image']
                             
-                            # Save price history
-                            save_price_history(game_id, store_id, current_price, discount_percent)
-                            
-                            # Check for historical low
-                            historical_low = get_historical_low(game_id, store_id)
                             page_url = store_page_url(store_id, item_type)
-                            is_historical_low = historical_low is not None and current_price <= historical_low
 
                             print(f"\033[1;36mGame: {game_name}\033[0m")
                             print(f"\033[1;32mCurrent Price: ${current_price:.2f} USD\033[0m")
                             print(f"\033[1;35mDiscount: {discount_percent}%\033[0m")
-                            if is_historical_low:
-                                print(f"\033[1;33m⭐ LOWEST PRICE EVER! ⭐\033[0m")
 
-                            if discount_percent > 0:
-                                if not is_sale_notified(store_id):
-                                    # New sale detected
-                                    print(f"\033[1;31mSale detected! Current price: ${current_price:.2f} ({discount_percent}% off)\033[0m")
-                                    send_discord_notification(
-                                        game_name=game_name,
-                                        current_price=current_price,
-                                        discount_percent=discount_percent,
-                                        image_url=image_url,
-                                        webhook_url=webhook_url,
-                                        bot_name=bot_name,
-                                        bot_avatar=bot_avatar,
-                                        app_id=store_id,
-                                        country_code=country_code,
-                                        currency_code=price_info.get("currency"),
-                                        is_historical_low=is_historical_low,
-                                        historical_low=historical_low,
-                                        store_url=page_url,
-                                        discord_role_id=get_discord_role_id(),
-                                    )
-                                    # Save sale details
-                                    save_sale_reminder(store_id, game_name, current_price, discount_percent)
-                                else:
-                                    print("Sale already notified. Skipping notification.")
+                            if should_post_sale(store_id, discount_percent):
+                                print(f"\033[1;31mDiscount changed! Current price: ${current_price:.2f} ({discount_percent}% off)\033[0m")
+                                send_discord_notification(
+                                    game_name=game_name,
+                                    current_price=current_price,
+                                    discount_percent=discount_percent,
+                                    image_url=image_url,
+                                    webhook_url=webhook_url,
+                                    bot_name=bot_name,
+                                    bot_avatar=bot_avatar,
+                                    app_id=store_id,
+                                    country_code=country_code,
+                                    currency_code=price_info.get("currency"),
+                                    store_url=page_url,
+                                    discord_role_id=get_discord_role_id(),
+                                )
+                            elif discount_percent > 0:
+                                print("Discount unchanged. Skipping notification.")
                             else:
-                                # Sale is no longer active
-                                if is_sale_notified(store_id):
-                                    print("Sale has ended. Removing from sale reminders...")
-                                    remove_expired_sale(store_id)
+                                print("No discount. Skipping notification.")
+
+                            remember_discount_state(store_id, game_name, current_price, discount_percent)
                         else:
                             print(f"[ERROR] Price information not available for '{game_name}'.")
 
@@ -178,46 +163,34 @@ def scan_multiple_games(country_code, language, webhook_url, bot_name, bot_avata
                         discount_percent = price_info['discount_percent']
                         image_url = game_data['header_image']
                         
-                        # Save price history
-                        save_price_history(game_id, store_id, current_price, discount_percent)
-                        
-                        # Check for historical low
-                        historical_low = get_historical_low(game_id, store_id)
-                        is_historical_low = historical_low is not None and current_price <= historical_low
                         page_url = store_page_url(store_id, item_type)
 
                         print(f"\033[1;36mGame: {game_name}\033[0m")
                         print(f"\033[1;32mCurrent Price: ${current_price:.2f} USD\033[0m")
                         print(f"\033[1;35mDiscount: {discount_percent}%\033[0m")
-                        if is_historical_low:
-                            print(f"\033[1;33m⭐ LOWEST PRICE EVER! ⭐\033[0m")
 
-                        if discount_percent > 0:
-                            if not is_sale_notified(store_id):
-                                # New sale detected
-                                print(f"\033[1;31mSale detected for '{game_name}'!\033[0m")
-                                send_discord_notification(
-                                    game_name=game_name,
-                                    current_price=current_price,
-                                    discount_percent=discount_percent,
-                                    image_url=image_url,
-                                    webhook_url=webhook_url,
-                                    bot_name=bot_name,
-                                    bot_avatar=bot_avatar,
-                                    app_id=store_id,
-                                    country_code=country_code,
-                                    currency_code=price_info.get("currency"),
-                                    is_historical_low=is_historical_low,
-                                    historical_low=historical_low,
-                                    store_url=page_url,
-                                    discord_role_id=get_discord_role_id(),
-                                )
-                                save_sale_reminder(store_id, game_name, current_price, discount_percent)
-                            else:
-                                print(f"Sale already notified for '{game_name}'. Skipping notification.")
+                        if should_post_sale(store_id, discount_percent):
+                            print(f"\033[1;31mDiscount changed for '{game_name}'!\033[0m")
+                            send_discord_notification(
+                                game_name=game_name,
+                                current_price=current_price,
+                                discount_percent=discount_percent,
+                                image_url=image_url,
+                                webhook_url=webhook_url,
+                                bot_name=bot_name,
+                                bot_avatar=bot_avatar,
+                                app_id=store_id,
+                                country_code=country_code,
+                                currency_code=price_info.get("currency"),
+                                store_url=page_url,
+                                discord_role_id=get_discord_role_id(),
+                            )
+                        elif discount_percent > 0:
+                            print(f"Discount unchanged for '{game_name}'. Skipping notification.")
                         else:
-                            if is_sale_notified(store_id):
-                                remove_expired_sale(store_id)
+                            print(f"No discount for '{game_name}'. Skipping notification.")
+
+                        remember_discount_state(store_id, game_name, current_price, discount_percent)
 
                 print("-------------------------------------------------")
             print("Sleeping for 1 hour before checking again...\n")

@@ -17,20 +17,18 @@ def main():
 
     send_discord_notification(
         game_name="Assetto Corsa Ultimate Edition",
-        current_price=184.03,
-        discount_percent=30,
+        current_price=59.51,
+        discount_percent=77,
         image_url=(
             "https://shared.akamai.steamstatic.com/store_item_assets/steam/"
             "bundles/6998/o2zrf7m5jxtaxbn8/header_ratio.jpg?t=1524219134"
         ),
         webhook_url=info["webhook_url"],
-        bot_name=info.get("bot_name", "AC Ultimate Promo na Steam"),
+        bot_name=info.get("bot_name", "Fox-Promos"),
         bot_avatar=info["bot_avatar"],
         app_id="6998",
         country_code=info["country_code"],
         currency_code="BRL",
-        is_historical_low=False,
-        historical_low=None,
         store_url=BUNDLE_URL,
         discord_role_id=None,
         mention_text="@alert-role",

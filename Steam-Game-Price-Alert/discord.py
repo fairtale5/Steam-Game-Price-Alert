@@ -2,7 +2,6 @@ import requests
 import logging
 
 RED = 16711680
-GREEN = 32768
 
 
 def format_money(amount, country_code="US", currency_code=None):
@@ -18,7 +17,15 @@ def format_money(amount, country_code="US", currency_code=None):
     return f"${amount:.2f}"
 
 
-def build_notification_content(discord_role_id=None, mention_text=None, is_historical_low=False):
+def short_game_name(game_name):
+    """Trim common suffixes so titles read like normal speech."""
+    name = (game_name or "").strip()
+    if name.endswith(" Edition"):
+        return name[:-len(" Edition")]
+    return name
+
+
+def build_notification_content(discord_role_id=None, mention_text=None):
     """Plain text above the embed: role ping only."""
     if mention_text is not None:
         text = mention_text.strip()
@@ -26,8 +33,6 @@ def build_notification_content(discord_role_id=None, mention_text=None, is_histo
         text = f"<@&{discord_role_id}>"
     else:
         text = ""
-    if is_historical_low and text:
-        text += "\n⭐ Menor preço que já vimos!"
     return text or None
 
 
@@ -39,33 +44,18 @@ def construct_embed(
     app_id,
     country_code="US",
     currency_code=None,
-    is_historical_low=False,
-    historical_low=None,
     store_url=None,
 ):
-    """Embed preview: clickable title, price line, banner image."""
+    """Embed preview: short discount title, price line, banner image."""
     price = format_money(current_price, country_code, currency_code)
-    description_parts = []
-
-    if discount_percent > 0:
-        description_parts.append(f"{price} — {discount_percent}% de desconto")
-        color = RED
-    else:
-        description_parts.append(f"Meta de preço: {price}")
-        color = GREEN
-
-    if is_historical_low:
-        description_parts.append("⭐ Menor preço registrado")
-    elif historical_low and historical_low < current_price:
-        description_parts.append(
-            f"Menor preço antes: {format_money(historical_low, country_code, currency_code)}"
-        )
+    title = f"Discount: {short_game_name(game_name)}"
+    description = f"{price} — {discount_percent}% off"
 
     return {
-        "title": game_name,
-        "description": "\n".join(description_parts),
+        "title": title,
+        "description": description,
         "url": store_url or f"https://store.steampowered.com/app/{app_id}/",
-        "color": color,
+        "color": RED,
         "image": {"url": image_url},
     }
 
@@ -81,8 +71,6 @@ def send_discord_notification(
     app_id: int,
     country_code: str = "US",
     currency_code: str = None,
-    is_historical_low: bool = False,
-    historical_low: float = None,
     store_url: str = None,
     discord_role_id: str = None,
     mention_text: str = None,
@@ -92,7 +80,6 @@ def send_discord_notification(
     content = build_notification_content(
         discord_role_id=discord_role_id,
         mention_text=mention_text,
-        is_historical_low=is_historical_low,
     )
     payload = {
         "username": bot_name,
@@ -106,8 +93,6 @@ def send_discord_notification(
                 app_id,
                 country_code=country_code,
                 currency_code=currency_code,
-                is_historical_low=is_historical_low,
-                historical_low=historical_low,
                 store_url=page_url,
             )
         ],
