@@ -2,6 +2,23 @@
 
 🎮 Never miss a Steam sale again! This bot monitors your wishlist games and instantly notifies you through Discord when prices drop. Perfect for gamers who want to grab their favorite titles at the best prices.
 
+**This fork** ([fairtale5/Steam-Game-Price-Alert](https://github.com/fairtale5/Steam-Game-Price-Alert)) is maintained for [FastFox Racing](https://github.com/fairtale5/FastFox) — Discord **Fox-Promos** alerts on the game server VPS. Upstream: [AliAlboushama/Steam-Game-Price-Alert](https://github.com/AliAlboushama/Steam-Game-Price-Alert).
+
+Python sources live in the **inner** folder `Steam-Game-Price-Alert/` (where `main.py` is). Clone the repo, then `cd Steam-Game-Price-Alert` before installing or running.
+
+## Changes in this fork
+
+Compared to upstream, this copy adds:
+
+- **`run_check.py`** — one-shot watchlist scan for **cron** (read config, check prices, post to Discord, exit). No menu, no long-running loop.
+- **Steam bundles** — watchlist links can be `/app/…` or `/bundle/…`. Bundles use Steam `ajaxresolvebundles` (`utils.py`), not the appdetails API alone.
+- **Discord layout for Fox-Promos** — webhook `username` from `bot_name`; **role ping** in the plain `content` line (`<@&role_id>`); embed title `Discount: …`, description `R$… — N% off`, banner image, link to the store page.
+- **Regional price formatting** — `format_money()` shows `R$` for Brazil (`BR` / `BRL`), plus `€` / `£` / `$` for other regions.
+- **`discord_role_id` in `user_info.json`** — optional; when set, cron and scans ping that Discord role above the embed.
+- **Smarter duplicate control** — `sale_reminder.json` stores the last discount **percent** per item. A new Discord post goes out when a sale starts or the discount **changes**, not on every hourly cron tick.
+- **`test_discord.py`** — send one sample bundle notification (uses `mention_text` instead of a real role ping) to verify webhook layout on the VPS.
+
+Interactive `main.py` (menu, add games, optional long-running scan) still works for setup and manual use.
 
 ## ✨ Features
 
@@ -61,12 +78,13 @@ Here's how the sale notifications appear in your Discord channel:
 
 ![Discord Notification Preview](https://files.catbox.moe/9eiuob.png)
 
-The notification includes:
-- Game's header image/thumbnail
-- Current price and discount percentage
-- **Historical low indicator** (when applicable)
-- Direct link to Steam store page
-- Color-coded embeds (red for sales, green for price targets)
+**In this fork**, a typical Fox-Promos message looks like:
+
+- **Username:** `bot_name` from config (e.g. `🎁 Fox-Promos`)
+- **Content line:** role ping only — `<@&discord_role_id>` (nothing else in `content`)
+- **Embed:** title `Discount: Game Name`, description `R$59.51 — 77% off`, large banner image, link to Steam app or bundle page
+
+Upstream-style embeds (historical-low callouts, longer copy) may differ; this fork keeps the preview minimal for promo channels.
 
 ## Requirements
 
@@ -77,10 +95,10 @@ This project requires **Python 3.7+** and the following packages:
 
 ## Installation
 
-1. Clone the repository:
+1. Clone this fork and enter the inner app folder:
 ```bash
-git clone https://github.com/AliAlboushama/Steam-Game-Price-Alert.git
-cd Steam-Game-Price-Alert
+git clone https://github.com/fairtale5/Steam-Game-Price-Alert.git
+cd Steam-Game-Price-Alert/Steam-Game-Price-Alert
 ```
 
 2. Install required packages:
@@ -115,6 +133,48 @@ When you first run the script, it will prompt you to enter:
 
 These settings are saved in `user_info.json` for future use.
 
+Optional fields used by this fork:
+
+```json
+{
+    "country_code": "BR",
+    "language": "en",
+    "webhook_url": "https://discord.com/api/webhooks/...",
+    "bot_name": "🎁 Fox-Promos",
+    "bot_avatar": "",
+    "discord_role_id": "1506941752223993857"
+}
+```
+
+| Field | Purpose |
+|--------|---------|
+| `discord_role_id` | Discord role to ping in the line above the embed (`<@&…>`) |
+| `sale_content_template` | Unused by current Fox-Promos layout (embed-only body); kept for compatibility |
+
+### Headless mode (cron, recommended for servers)
+
+After setup and adding games with `main.py` (menu **2**), run a single check with:
+
+```bash
+python3 run_check.py
+```
+
+Example hourly cron on Linux:
+
+```cron
+0 * * * * cd /path/to/Steam-Game-Price-Alert && ./venv/bin/python3 run_check.py >> cron.log 2>&1
+```
+
+`run_check.py` reads `user_info.json`, scans every game in `saved_games.db`, posts to Discord when `should_post_sale()` is true, updates `sale_reminder.json`, then exits.
+
+Test webhook layout without pinging a real role:
+
+```bash
+python3 test_discord.py
+```
+
+To force another Discord post while the same sale is still active, remove that product from `sale_reminder.json` (or delete the file).
+
 ### Main Menu Options
 
 1. **Scan for sales** - Monitor a single game for price drops
@@ -128,8 +188,9 @@ These settings are saved in `user_info.json` for future use.
 ### Adding Games
 
 You can add games by providing a Steam store link:
-- Example: `https://store.steampowered.com/app/12345/GameName/`
-- The script validates the link format and extracts the game ID automatically
+- App example: `https://store.steampowered.com/app/12345/GameName/`
+- Bundle example: `https://store.steampowered.com/bundle/6998/Assetto_Corsa_Ultimate_Edition/`
+- The script validates the link format and extracts the store id automatically
 
 ### Price Monitoring
 
@@ -172,17 +233,19 @@ You can customize:
 
 ```
 Steam-Game-Price-Alert/
-├── main.py              # Main application entry point
+├── main.py              # Interactive menu (setup, add games, optional scan loop)
+├── run_check.py         # One-shot check for cron (Fox-Promos production path)
+├── test_discord.py      # Send one test webhook message
 ├── scanner.py           # Scanning functions for single/multiple games
 ├── discord.py           # Discord webhook notification handler
 ├── saved_games.py       # Database operations for games and price history
-├── saved_info.py        # User settings management
-├── stop_spam.py         # Sale notification tracking (prevents duplicates)
-├── utils.py             # Utility functions (API calls, validation, formatting)
+├── saved_info.py        # User settings management (incl. discord_role_id)
+├── stop_spam.py         # Remembered discount per item (when to post again)
+├── utils.py             # Steam API (apps + bundles), validation, formatting
 ├── requirements.txt     # Python dependencies
 ├── saved_games.db       # SQLite database (created automatically)
-├── user_info.json       # User configuration (created automatically)
-└── sale_reminder.json   # Active sale tracking (created automatically)
+├── user_info.json       # User configuration (created automatically, do not commit)
+└── sale_reminder.json   # Last discount per item (created automatically)
 ```
 
 ## FAQ
@@ -191,7 +254,13 @@ Steam-Game-Price-Alert/
 A: Use option 2 in the main menu to add games. You can add multiple games in sequence, or use option 3 to scan multiple games at once.
 
 **Q: Can I change how often prices are checked?**  
-A: Yes, modify the `SLEEP_TIME` constant in `main.py` (default: 3600 seconds = 1 hour).
+A: For servers, use cron with `run_check.py` (e.g. every hour). For the interactive loop in `main.py`, modify `SLEEP_TIME` (default: 3600 seconds = 1 hour).
+
+**Q: Why didn't cron post again on the next hour?**  
+A: This fork only posts when the discount is new or **changed**. Same sale, same percent → skipped. Clear that item in `sale_reminder.json` to post again.
+
+**Q: Can I track Steam bundles, not just single games?**  
+A: Yes. Add a `/bundle/…` URL in menu **2**. Pricing comes from Steam `ajaxresolvebundles`.
 
 **Q: Not receiving Discord notifications?**  
 A: Verify your webhook URL is correct, the webhook is enabled in your Discord server, and check the `debug.log` file for error messages.
@@ -210,11 +279,9 @@ A: The bot saves all data (games, settings, price history) to files and database
 
 ## Contributing
 
-Contributions are welcome! To contribute:
+Upstream contributions: [AliAlboushama/Steam-Game-Price-Alert](https://github.com/AliAlboushama/Steam-Game-Price-Alert).
 
-1. Fork the repository
-2. Create feature branch
-3. Submit pull request with detailed description
+For this fork (Fox-Promos / FastFox): open an issue or PR on [fairtale5/Steam-Game-Price-Alert](https://github.com/fairtale5/Steam-Game-Price-Alert).
 
 ## License
 

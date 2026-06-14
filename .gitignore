@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+debug.log
+user_info.json
+saved_games.db
+sale_reminder.json
+sale_reminder.json.backup
+cron.log
+venv/
